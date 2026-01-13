@@ -3,6 +3,7 @@ import os
 import asyncio
 import tempfile
 import cv2
+import gc
 import numpy as np
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -349,6 +350,9 @@ async def process_video(job_id: str, video_url: str):
     
     frame_count = 0
     
+    # Memory optimization: Resize frame for faster processing
+    PROCESS_WIDTH = 640  # Standard YOLO input size
+    
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -357,15 +361,20 @@ async def process_video(job_id: str, video_url: str):
         frame_count += 1
         h, w, _ = frame.shape
         
-        # Predict
+        # Resize frame to reduce memory usage
+        scale = PROCESS_WIDTH / w
+        frame_resized = cv2.resize(frame, (PROCESS_WIDTH, int(h * scale)))
+        
+        # Predict on resized frame
         results = model.predict(
-            frame,
+            frame_resized,
             device="cpu",
             conf=CONF_THRESH,
-            verbose=False
+            verbose=False,
+            max_det=50  # Limit max detections per frame
         )
         
-        # Process detections
+        # Process detections (scale back coordinates)
         detections = []
         if results[0].boxes is not None:
             boxes = results[0].boxes.xyxy.cpu().numpy()
@@ -374,6 +383,9 @@ async def process_video(job_id: str, video_url: str):
             
             for box, cls_id, conf in zip(boxes, cls_ids, confidences):
                 x1, y1, x2, y2 = box
+                # Scale coordinates back to original frame size
+                x1, x2 = x1 / scale, x2 / scale
+                y1, y2 = y1 / scale, y2 / scale
                 cX = int((x1 + x2) / 2.0)
                 cY = int((y1 + y2) / 2.0)
                 
@@ -383,6 +395,9 @@ async def process_video(job_id: str, video_url: str):
                     'class': class_map.get(cls_id, 'mobil'),
                     'conf': conf
                 })
+        
+        # Clear frame from memory
+        del frame, frame_resized, results
         
         # Update tracking
         objects, next_object_id, vehicle_count_total = update_tracking(
@@ -396,13 +411,17 @@ async def process_video(job_id: str, video_url: str):
         jobs[job_id]["kiri"] = counters['kiri']['total']
         jobs[job_id]["kanan"] = counters['kanan']['total']
         
-        # Save periodically (every 10%)
+        # Save periodically (every 10%) and force garbage collection
         if current_progress % 10 == 0:
             save_job(job_id)
+            gc.collect()  # Force garbage collection to free memory
         
         await asyncio.sleep(0)
     
     cap.release()
+    
+    # Final garbage collection
+    gc.collect()
     
     # Final results - NORMALIZED RESPONSE
     jobs[job_id]["status"] = "completed"
