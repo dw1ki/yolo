@@ -41,13 +41,40 @@ app.add_middleware(
 # ================= MODEL =================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "models", "best.pt")
+JOBS_DIR = os.path.join(BASE_DIR, "jobs")
+
+# Ensure jobs directory exists
+os.makedirs(JOBS_DIR, exist_ok=True)
 
 if not os.path.exists(MODEL_PATH):
     raise RuntimeError(f"Model not found at {MODEL_PATH}")
 
 model = YOLO(MODEL_PATH)
 
+# In-memory jobs cache (with file persistence)
 jobs = {}
+
+def save_job(job_id: str):
+    """Save job to persistent file storage"""
+    try:
+        job_file = os.path.join(JOBS_DIR, f"{job_id}.json")
+        with open(job_file, 'w') as f:
+            import json
+            json.dump(jobs[job_id], f)
+    except Exception as e:
+        print(f"⚠️ Failed to save job {job_id}: {e}")
+
+def load_job(job_id: str):
+    """Load job from persistent file storage"""
+    try:
+        job_file = os.path.join(JOBS_DIR, f"{job_id}.json")
+        if os.path.exists(job_file):
+            with open(job_file, 'r') as f:
+                import json
+                return json.load(f)
+    except Exception as e:
+        print(f"⚠️ Failed to load job {job_id}: {e}")
+    return None
 
 # ================= TRACKING CONFIG =================
 LINE_POSITION = 300
@@ -298,18 +325,22 @@ async def process_video(job_id: str, video_url: str):
     vehicle_count_total = 0
     
     jobs[job_id] = {
+        "status": "processing",
         "progress": 0,
         "total": 0,
         "kiri": 0,
         "kanan": 0,
         "detections": []
     }
+    save_job(job_id)  # Save initial state
     
     cap = cv2.VideoCapture(video_url)
     
     if not cap.isOpened():
+        jobs[job_id]["status"] = "failed"
         jobs[job_id]["progress"] = -1
         jobs[job_id]["error"] = "Cannot open video"
+        save_job(job_id)
         return
     
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -359,16 +390,22 @@ async def process_video(job_id: str, video_url: str):
         )
         
         # Update progress
-        jobs[job_id]["progress"] = int((frame_count / total_frames) * 100)
+        current_progress = int((frame_count / total_frames) * 100)
+        jobs[job_id]["progress"] = current_progress
         jobs[job_id]["total"] = vehicle_count_total
         jobs[job_id]["kiri"] = counters['kiri']['total']
         jobs[job_id]["kanan"] = counters['kanan']['total']
+        
+        # Save periodically (every 10%)
+        if current_progress % 10 == 0:
+            save_job(job_id)
         
         await asyncio.sleep(0)
     
     cap.release()
     
     # Final results - NORMALIZED RESPONSE
+    jobs[job_id]["status"] = "completed"
     jobs[job_id]["progress"] = 100
     jobs[job_id]["completed"] = True
     
@@ -389,6 +426,9 @@ async def process_video(job_id: str, video_url: str):
             "truk": counters['kanan']['truk']
         }
     }
+    
+    # Save final result
+    save_job(job_id)
     
     # DEBUG: Print detailed class distribution
     total_mobil = counters['kiri']['mobil'] + counters['kanan']['mobil']
@@ -437,7 +477,15 @@ async def result(job_id: str):
     Return normalized response with explicit field names
     to prevent vehicle_count being confused with frames
     """
+    # Check in-memory cache first
     job = jobs.get(job_id)
+    
+    # If not in memory, try loading from file (in case of restart)
+    if not job:
+        job = load_job(job_id)
+        if job:
+            jobs[job_id] = job  # Restore to memory cache
+    
     if not job:
         raise HTTPException(404, detail="Job not found")
     
