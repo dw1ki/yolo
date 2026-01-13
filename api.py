@@ -390,6 +390,15 @@ async def process_video(job_id: str, video_url: str):
         }
     }
     
+    # DEBUG: Print detailed class distribution
+    total_mobil = counters['kiri']['mobil'] + counters['kanan']['mobil']
+    total_bus = counters['kiri']['bus'] + counters['kanan']['bus']
+    total_truk = counters['kiri']['truk'] + counters['kanan']['truk']
+    print(f"📊 CLASS DISTRIBUTION:")
+    print(f"   Mobil: {total_mobil} ({total_mobil/vehicle_count_total*100:.1f}%)")
+    print(f"   Bus: {total_bus} ({total_bus/vehicle_count_total*100:.1f}%)")
+    print(f"   Truk: {total_truk} ({total_truk/vehicle_count_total*100:.1f}%)")
+    
     # Validation: Ensure vehicle_count !== frames_processed
     if jobs[job_id]["vehicle_count"] == jobs[job_id]["frames_processed"]:
         print(f"⚠️ WARNING: vehicle_count ({jobs[job_id]['vehicle_count']}) == frames_processed ({jobs[job_id]['frames_processed']})")
