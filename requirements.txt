@@ -1,0 +1,8 @@
+numpy<2.0
+opencv-python-headless
+ultralytics
+fastapi
+uvicorn[standard]
+python-dotenv
+cloudinary
+gunicorn

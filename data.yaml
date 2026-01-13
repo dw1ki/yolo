@@ -1,0 +1,8 @@
+path: /mnt/localdisk1/vehicle-night-yolo
+train: data/images/train
+val: data/images/val
+
+names:
+  0: mobil
+  1: bus
+  2: truk
