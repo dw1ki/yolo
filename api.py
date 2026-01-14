@@ -356,15 +356,29 @@ async def process_video(job_id: str, video_url: str):
         jobs[job_id]["error"] = "Cannot open video"
         save_job(job_id)
         return
-    
+
+    # === VALIDASI DURASI VIDEO ===
+    duration = cap.get(cv2.CAP_PROP_DURATION)
+    if duration > 300:
+        jobs[job_id]["status"] = "failed"
+        jobs[job_id]["progress"] = -1
+        jobs[job_id]["error"] = f"Video terlalu panjang ({duration:.1f} detik). Maksimal 300 detik (5 menit)."
+        save_job(job_id)
+        cap.release()
+        return
+
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     if total_frames == 0:
         total_frames = 1
-    
+
     frame_count = 0
     
     # Memory optimization: Resize frame for faster processing
     PROCESS_WIDTH = 640  # Standard YOLO input size
+
+    # === COUNTING LINE SETUP ===
+    counting_line_y = None  # Akan di-set setelah dapat frame height
+    counted_ids = set()  # Untuk menyimpan object_id yang sudah dihitung
     
     # === OUTPUT VIDEO WRITER ===
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -378,6 +392,10 @@ async def process_video(job_id: str, video_url: str):
 
         frame_count += 1
         h, w, _ = frame.shape
+
+        # Set counting line di tengah frame (hanya sekali)
+        if counting_line_y is None:
+            counting_line_y = h // 2
 
         # Resize frame to reduce memory usage
         scale = PROCESS_WIDTH / w
@@ -419,6 +437,18 @@ async def process_video(job_id: str, video_url: str):
                 cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
                 label = f"{class_map.get(cls_id, 'mobil')} {conf:.2f}"
                 cv2.putText(frame, label, (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+                # === COUNTING LINE LOGIC ===
+                # Hitung kendaraan jika centroid melewati garis
+                if abs(cY - counting_line_y) < 5:  # Toleransi 5px
+                    object_id = f"{cX}_{cY}_{frame_count}"
+                    if object_id not in counted_ids:
+                        vehicle_count_total += 1
+                        counted_ids.add(object_id)
+
+
+        # Draw counting line di frame
+        cv2.line(frame, (0, counting_line_y), (w, counting_line_y), (0, 0, 255), 2)
 
         # Initialize writer after getting frame size
         if out_writer is None:
@@ -579,17 +609,34 @@ async def result(job_id: str):
     """
     # Check in-memory cache first
     job = jobs.get(job_id)
-    
+
     # If not in memory, try loading from file (in case of restart)
     if not job:
-        print(f"[ERROR] Job {job_id} not found in memory. Trying to load from file...")
+        print(f"[INFO] Job {job_id} not found in memory. Trying to load from file...")
         job = load_job(job_id)
         if job:
             jobs[job_id] = job  # Restore to memory cache
             print(f"[INFO] Job {job_id} loaded from file and restored to memory.")
         else:
-            print(f"[ERROR] Job {job_id} not found in file storage either!")
-            raise HTTPException(404, detail="Job not found (not in memory or file)")
+            print(f"[INFO] Job {job_id} not found in file storage. Returning status 'pending'.")
+            # Kembalikan response status pending agar polling frontend tidak error
+            response = {
+                "job_id": job_id,
+                "status": "pending",
+                "progress": 0,
+                "vehicle_count": 0,
+                "frames_processed": 0,
+                "lane": {
+                    "kiri": {"total": 0, "mobil": 0, "bus": 0, "truk": 0},
+                    "kanan": {"total": 0, "mobil": 0, "bus": 0, "truk": 0}
+                },
+                "detections": [],
+                "outputVideoUrl": None,
+                "_mapping_error": False,
+                "_warning": "Job belum ditemukan, silakan tunggu."
+            }
+            response = to_python_type(response)
+            return JSONResponse(response)
 
     # Validate job completeness
     required_fields = ["vehicle_count", "frames_processed", "lane"]
