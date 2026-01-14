@@ -74,7 +74,8 @@ def save_job(job_id: str):
         job_file = os.path.join(JOBS_DIR, f"{job_id}.json")
         with open(job_file, 'w') as f:
             import json
-            json.dump(jobs[job_id], f)
+            # Always convert to python types before saving
+            json.dump(to_python_type(jobs[job_id]), f)
     except Exception as e:
         print(f"⚠️ Failed to save job {job_id}: {e}")
 
@@ -363,8 +364,14 @@ async def process_video(job_id: str, video_url: str):
             save_job(job_id)
             return
 
+
         # === VALIDASI DURASI VIDEO ===
-        duration = cap.get(cv2.CAP_PROP_DURATION)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps > 0:
+            duration = total_frames / fps
+        else:
+            duration = 0
         if duration > 300:
             print(f"[ERROR] Video too long for job {job_id}: {duration:.1f} seconds")
             jobs[job_id]["status"] = "failed"
