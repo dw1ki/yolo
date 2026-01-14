@@ -445,10 +445,13 @@ async def process_video(job_id: str, video_url: str):
             "truk": counters['kanan']['truk']
         }
     }
-    
+
+    # Save all detections for the job (last frame's detections as example)
+    jobs[job_id]["detections"] = detections
+
     # Save final result
     save_job(job_id)
-    
+
     # DEBUG: Print detailed class distribution
     total_mobil = counters['kiri']['mobil'] + counters['kanan']['mobil']
     total_bus = counters['kiri']['bus'] + counters['kanan']['bus']
@@ -457,12 +460,12 @@ async def process_video(job_id: str, video_url: str):
     print(f"   Mobil: {total_mobil} ({total_mobil/vehicle_count_total*100:.1f}%)")
     print(f"   Bus: {total_bus} ({total_bus/vehicle_count_total*100:.1f}%)")
     print(f"   Truk: {total_truk} ({total_truk/vehicle_count_total*100:.1f}%)")
-    
+
     # Validation: Ensure vehicle_count !== frames_processed
     if jobs[job_id]["vehicle_count"] == jobs[job_id]["frames_processed"]:
         print(f"⚠️ WARNING: vehicle_count ({jobs[job_id]['vehicle_count']}) == frames_processed ({jobs[job_id]['frames_processed']})")
         print("   This indicates a counting error!")
-    
+
     print(f"✅ Final: {jobs[job_id]['vehicle_count']} vehicles in {jobs[job_id]['frames_processed']} frames")
 
 # ================= ROUTES =================
@@ -501,13 +504,22 @@ async def result(job_id: str):
     
     # If not in memory, try loading from file (in case of restart)
     if not job:
+        print(f"[ERROR] Job {job_id} not found in memory. Trying to load from file...")
         job = load_job(job_id)
         if job:
             jobs[job_id] = job  # Restore to memory cache
-    
-    if not job:
-        raise HTTPException(404, detail="Job not found")
-    
+            print(f"[INFO] Job {job_id} loaded from file and restored to memory.")
+        else:
+            print(f"[ERROR] Job {job_id} not found in file storage either!")
+            raise HTTPException(404, detail="Job not found (not in memory or file)")
+
+    # Validate job completeness
+    required_fields = ["vehicle_count", "frames_processed", "lane"]
+    missing_fields = [f for f in required_fields if f not in job]
+    if job.get("completed") and missing_fields:
+        print(f"[ERROR] Job {job_id} is marked completed but missing fields: {missing_fields}")
+        raise HTTPException(500, detail=f"Job completed but missing fields: {missing_fields}")
+
     # Validate response before returning
     if job.get("completed"):
         # Ensure vehicle_count is present and different from frames
@@ -520,22 +532,25 @@ async def result(job_id: str):
             print(f"   frames_processed: {frames}")
             # Still return, but add warning flag
             job["_mapping_error"] = True
-    
+
     return JSONResponse({
         "job_id": job_id,
         "status": "completed" if job.get("completed") else "processing",
         "progress": job.get("progress", 0),
-        
+
         # 🔴 CRITICAL: Explicit vehicle counting (NOT frames)
         "vehicle_count": job.get("vehicle_count", 0),  # Unique vehicles
         "frames_processed": job.get("frames_processed", 0),  # Total frames
-        
+
         # Lane breakdown
         "lane": job.get("lane", {
             "kiri": {"total": 0, "mobil": 0, "bus": 0, "truk": 0},
             "kanan": {"total": 0, "mobil": 0, "bus": 0, "truk": 0}
         }),
-        
+
+        # Detection results (last frame or summary)
+        "detections": job.get("detections", []),
+
         # Safety flag
         "_mapping_error": job.get("_mapping_error", False),
         "_warning": "If vehicle_count == frames_processed, there's a counting error"
