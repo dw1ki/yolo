@@ -409,36 +409,58 @@ async def process_video(job_id: str, video_url: str):
                 save_job(job_id)
                 cap.release()
                 return
-            ret, frame = cap.read()
-            if not ret:
-                print(f"[YOLO] End of video or read error for job {job_id} at frame {frame_count}")
-                break
-            # ...existing code...
-            frame_count += 1
-            h, w, _ = frame.shape
-            if counting_line_y is None:
-                counting_line_y = h // 2
-            scale = PROCESS_WIDTH / w
-            frame_resized = cv2.resize(frame, (PROCESS_WIDTH, int(h * scale)))
-            results = model.predict(
-                frame_resized,
-                device="cpu",
-                conf=CONF_THRESH,
-                verbose=False,
-                max_det=50
-            )
-            # ...existing code...
-            # Update progress
-            current_progress = int((frame_count / total_frames) * 100)
-            jobs[job_id]["progress"] = current_progress
-            jobs[job_id]["total"] = vehicle_count_total
-            jobs[job_id]["kiri"] = counters['kiri']['total']
-            jobs[job_id]["kanan"] = counters['kanan']['total']
-            if current_progress % 10 == 0:
-                print(f"[YOLO] Progress for job {job_id}: {current_progress}% ({frame_count}/{total_frames} frames)")
+            try:
+                ret, frame = cap.read()
+                if not ret:
+                    print(f"[YOLO] End of video or read error for job {job_id} at frame {frame_count}")
+                    break
+                # ...existing code...
+                frame_count += 1
+                h, w, _ = frame.shape
+                if counting_line_y is None:
+                    counting_line_y = h // 2
+                scale = PROCESS_WIDTH / w
+                frame_resized = cv2.resize(frame, (PROCESS_WIDTH, int(h * scale)))
+                # === CRITICAL: Timeout for model.predict ===
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(model.predict,
+                        frame_resized,
+                        device="cpu",
+                        conf=CONF_THRESH,
+                        verbose=False,
+                        max_det=50
+                    )
+                    try:
+                        results = future.result(timeout=60)  # 60s per frame max
+                    except concurrent.futures.TimeoutError:
+                        print(f"[ERROR] model.predict timeout for job {job_id} at frame {frame_count}")
+                        jobs[job_id]["status"] = "failed"
+                        jobs[job_id]["progress"] = -1
+                        jobs[job_id]["error"] = f"YOLO model.predict timeout at frame {frame_count}"
+                        save_job(job_id)
+                        cap.release()
+                        return
+                # ...existing code...
+                # Update progress
+                current_progress = int((frame_count / total_frames) * 100)
+                jobs[job_id]["progress"] = current_progress
+                jobs[job_id]["total"] = vehicle_count_total
+                jobs[job_id]["kiri"] = counters['kiri']['total']
+                jobs[job_id]["kanan"] = counters['kanan']['total']
+                if current_progress % 10 == 0:
+                    print(f"[YOLO] Progress for job {job_id}: {current_progress}% ({frame_count}/{total_frames} frames)")
+                    save_job(job_id)
+                    gc.collect()
+                await asyncio.sleep(0)
+            except Exception as e:
+                print(f"[ERROR] Exception in frame processing for job {job_id}: {e}")
+                jobs[job_id]["status"] = "failed"
+                jobs[job_id]["progress"] = -1
+                jobs[job_id]["error"] = f"Exception in frame processing: {e}"
                 save_job(job_id)
-                gc.collect()
-            await asyncio.sleep(0)
+                cap.release()
+                return
 
         cap.release()
         if out_writer is not None:
