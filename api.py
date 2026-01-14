@@ -366,18 +366,23 @@ async def process_video(job_id: str, video_url: str):
     # Memory optimization: Resize frame for faster processing
     PROCESS_WIDTH = 640  # Standard YOLO input size
     
+    # === OUTPUT VIDEO WRITER ===
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    output_path = os.path.join(tempfile.gettempdir(), f"output_{job_id}.mp4")
+    out_writer = None
+
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-        
+
         frame_count += 1
         h, w, _ = frame.shape
-        
+
         # Resize frame to reduce memory usage
         scale = PROCESS_WIDTH / w
         frame_resized = cv2.resize(frame, (PROCESS_WIDTH, int(h * scale)))
-        
+
         # Predict on resized frame
         results = model.predict(
             frame_resized,
@@ -386,14 +391,14 @@ async def process_video(job_id: str, video_url: str):
             verbose=False,
             max_det=50  # Limit max detections per frame
         )
-        
+
         # Process detections (scale back coordinates)
         detections = []
         if results[0].boxes is not None:
             boxes = results[0].boxes.xyxy.cpu().numpy()
             cls_ids = results[0].boxes.cls.cpu().numpy().astype(int)
             confidences = results[0].boxes.conf.cpu().numpy()
-            
+
             for box, cls_id, conf in zip(boxes, cls_ids, confidences):
                 x1, y1, x2, y2 = box
                 # Scale coordinates back to original frame size
@@ -401,46 +406,76 @@ async def process_video(job_id: str, video_url: str):
                 y1, y2 = y1 / scale, y2 / scale
                 cX = int((x1 + x2) / 2.0)
                 cY = int((y1 + y2) / 2.0)
-                
+
                 detections.append({
                     'bbox': [x1, y1, x2, y2],
                     'centroid': (cX, cY),
                     'class': class_map.get(cls_id, 'mobil'),
                     'conf': conf
                 })
-        
+
+                # Draw bounding box and label on frame
+                color = (0, 255, 0)
+                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
+                label = f"{class_map.get(cls_id, 'mobil')} {conf:.2f}"
+                cv2.putText(frame, label, (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+        # Initialize writer after getting frame size
+        if out_writer is None:
+            out_writer = cv2.VideoWriter(output_path, fourcc, 20.0, (w, h))
+
+        out_writer.write(frame)
+
         # Clear frame from memory
         del frame, frame_resized, results
-        
+
         # Update tracking
         objects, next_object_id, vehicle_count_total = update_tracking(
             objects, next_object_id, detections, w, counters, vehicle_count_total
         )
-        
+
         # Update progress
         current_progress = int((frame_count / total_frames) * 100)
         jobs[job_id]["progress"] = current_progress
         jobs[job_id]["total"] = vehicle_count_total
         jobs[job_id]["kiri"] = counters['kiri']['total']
         jobs[job_id]["kanan"] = counters['kanan']['total']
-        
+
         # Save periodically (every 10%) and force garbage collection
         if current_progress % 10 == 0:
             save_job(job_id)
             gc.collect()  # Force garbage collection to free memory
-        
+
         await asyncio.sleep(0)
-    
+
     cap.release()
-    
+    if out_writer is not None:
+        out_writer.release()
+
+    # Upload output video ke Cloudinary
+    output_video_url = None
+    try:
+        result = cloudinary.uploader.upload(
+            output_path,
+            resource_type="video",
+            folder="output_videos"
+        )
+        output_video_url = result["secure_url"]
+    except Exception as e:
+        print(f"[ERROR] Failed to upload output video: {e}")
+        output_video_url = None
+    if os.path.exists(output_path):
+        os.remove(output_path)
+
     # Final garbage collection
     gc.collect()
-    
+
     # Final results - NORMALIZED RESPONSE
     jobs[job_id]["status"] = "completed"
     jobs[job_id]["progress"] = 100
     jobs[job_id]["completed"] = True
-    
+    jobs[job_id]["outputVideoUrl"] = output_video_url
+
     # 🔴 CRITICAL: Explicit field names to prevent mapping confusion
     jobs[job_id]["vehicle_count"] = vehicle_count_total  # Unique vehicles counted
     jobs[job_id]["frames_processed"] = frame_count  # Total frames processed
@@ -563,6 +598,9 @@ async def result(job_id: str):
 
         # Detection results (last frame or summary)
         "detections": job.get("detections", []),
+
+        # Output video URL
+        "outputVideoUrl": job.get("outputVideoUrl", None),
 
         # Safety flag
         "_mapping_error": job.get("_mapping_error", False),
