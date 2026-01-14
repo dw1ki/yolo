@@ -8,6 +8,19 @@ import numpy as np
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
+import numpy as np
+# Helper to convert numpy types to Python native types
+def to_python_type(obj):
+    if isinstance(obj, np.generic):
+        return obj.item()
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: to_python_type(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [to_python_type(v) for v in obj]
+    else:
+        return obj
 from ultralytics import YOLO
 from dotenv import load_dotenv
 import cloudinary
@@ -533,7 +546,7 @@ async def result(job_id: str):
             # Still return, but add warning flag
             job["_mapping_error"] = True
 
-    return JSONResponse({
+    response = {
         "job_id": job_id,
         "status": "completed" if job.get("completed") else "processing",
         "progress": job.get("progress", 0),
@@ -554,4 +567,6 @@ async def result(job_id: str):
         # Safety flag
         "_mapping_error": job.get("_mapping_error", False),
         "_warning": "If vehicle_count == frames_processed, there's a counting error"
-    })
+    }
+    response = to_python_type(response)
+    return JSONResponse(response)
