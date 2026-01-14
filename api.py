@@ -448,15 +448,42 @@ async def process_video(job_id: str, video_url: str):
 
         await asyncio.sleep(0)
 
+
     cap.release()
     if out_writer is not None:
         out_writer.release()
 
-    # Upload output video ke Cloudinary
+    # === RE-ENCODE VIDEO AGAR KOMPATIBEL BROWSER ===
+    import subprocess
+    reencoded_path = output_path.replace(".mp4", "_encoded.mp4")
+    def reencode_video(input_path, output_path):
+        command = [
+            "ffmpeg",
+            "-y",
+            "-i", input_path,
+            "-c:v", "libx264",
+            "-c:a", "aac",
+            "-movflags", "+faststart",
+            output_path
+        ]
+        try:
+            subprocess.run(command, check=True)
+            return True
+        except Exception as e:
+            print(f"[ERROR] ffmpeg re-encode gagal: {e}")
+            return False
+
+    # Proses re-encode
+    if reencode_video(output_path, reencoded_path):
+        upload_path = reencoded_path
+    else:
+        upload_path = output_path  # fallback jika gagal
+
+    # Upload ke Cloudinary
     output_video_url = None
     try:
         result = cloudinary.uploader.upload(
-            output_path,
+            upload_path,
             resource_type="video",
             folder="output_videos"
         )
@@ -464,8 +491,11 @@ async def process_video(job_id: str, video_url: str):
     except Exception as e:
         print(f"[ERROR] Failed to upload output video: {e}")
         output_video_url = None
-    if os.path.exists(output_path):
-        os.remove(output_path)
+
+    # Hapus file sementara
+    for path in [output_path, reencoded_path]:
+        if os.path.exists(path):
+            os.remove(path)
 
     # Final garbage collection
     gc.collect()
