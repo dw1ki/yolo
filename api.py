@@ -354,6 +354,7 @@ async def process_video(job_id: str, video_url: str):
     }
     save_job(job_id)  # Save initial state
 
+    import time
     try:
         cap = cv2.VideoCapture(video_url)
         if not cap.isOpened():
@@ -363,7 +364,6 @@ async def process_video(job_id: str, video_url: str):
             jobs[job_id]["error"] = "Cannot open video"
             save_job(job_id)
             return
-
 
         # === VALIDASI DURASI VIDEO ===
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -392,9 +392,23 @@ async def process_video(job_id: str, video_url: str):
         counted_ids = set()
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         output_path = os.path.join(tempfile.gettempdir(), f"output_{job_id}.mp4")
+
+        # === MAX PROCESSING TIME ===
+        max_processing_seconds = 300  # 5 minutes
+        start_time = time.time()
         out_writer = None
 
         while True:
+            # Abort if processing time exceeded
+            elapsed = time.time() - start_time
+            if elapsed > max_processing_seconds:
+                print(f"[ERROR] Job {job_id} exceeded max processing time of {max_processing_seconds} seconds. Aborting.")
+                jobs[job_id]["status"] = "failed"
+                jobs[job_id]["progress"] = -1
+                jobs[job_id]["error"] = f"Job exceeded max processing time of {max_processing_seconds} seconds (5 minutes)."
+                save_job(job_id)
+                cap.release()
+                return
             ret, frame = cap.read()
             if not ret:
                 print(f"[YOLO] End of video or read error for job {job_id} at frame {frame_count}")
