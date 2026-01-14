@@ -312,18 +312,22 @@ def update_tracking(objects, next_object_id, detections, frame_width, counters, 
 
 # ================= HELPERS =================
 async def upload_to_cloudinary(file: UploadFile):
-    suffix = os.path.splitext(file.filename)[1]
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(await file.read())
-        tmp_path = tmp.name
+    try:
+        suffix = os.path.splitext(file.filename)[1]
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(await file.read())
+            tmp_path = tmp.name
 
-    result = cloudinary.uploader.upload(
-        tmp_path,
-        resource_type="video",
-        folder="input_videos"
-    )
-    os.remove(tmp_path)
-    return result["secure_url"]
+        result = cloudinary.uploader.upload(
+            tmp_path,
+            resource_type="video",
+            folder="input_videos"
+        )
+        os.remove(tmp_path)
+        return result["secure_url"]
+    except Exception as e:
+        print(f"[ERROR] Cloudinary upload failed: {e}")
+        raise HTTPException(500, detail=f"Cloudinary upload failed: {e}")
 
 # ================= PROCESS =================
 async def process_video(job_id: str, video_url: str):
