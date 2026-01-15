@@ -3,24 +3,10 @@ import os
 import asyncio
 import tempfile
 import cv2
-import gc
 import numpy as np
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
-import numpy as np
-# Helper to convert numpy types to Python native types
-def to_python_type(obj):
-    if isinstance(obj, np.generic):
-        return obj.item()
-    elif isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, dict):
-        return {k: to_python_type(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [to_python_type(v) for v in obj]
-    else:
-        return obj
 from ultralytics import YOLO
 from dotenv import load_dotenv
 import cloudinary
@@ -55,41 +41,13 @@ app.add_middleware(
 # ================= MODEL =================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "models", "best.pt")
-JOBS_DIR = os.path.join(BASE_DIR, "jobs")
-
-# Ensure jobs directory exists
-os.makedirs(JOBS_DIR, exist_ok=True)
 
 if not os.path.exists(MODEL_PATH):
     raise RuntimeError(f"Model not found at {MODEL_PATH}")
 
 model = YOLO(MODEL_PATH)
 
-# In-memory jobs cache (with file persistence)
 jobs = {}
-
-def save_job(job_id: str):
-    """Save job to persistent file storage"""
-    try:
-        job_file = os.path.join(JOBS_DIR, f"{job_id}.json")
-        with open(job_file, 'w') as f:
-            import json
-            # Always convert to python types before saving
-            json.dump(to_python_type(jobs[job_id]), f)
-    except Exception as e:
-        print(f"⚠️ Failed to save job {job_id}: {e}")
-
-def load_job(job_id: str):
-    """Load job from persistent file storage"""
-    try:
-        job_file = os.path.join(JOBS_DIR, f"{job_id}.json")
-        if os.path.exists(job_file):
-            with open(job_file, 'r') as f:
-                import json
-                return json.load(f)
-    except Exception as e:
-        print(f"⚠️ Failed to load job {job_id}: {e}")
-    return None
 
 # ================= TRACKING CONFIG =================
 LINE_POSITION = 300
@@ -313,22 +271,18 @@ def update_tracking(objects, next_object_id, detections, frame_width, counters, 
 
 # ================= HELPERS =================
 async def upload_to_cloudinary(file: UploadFile):
-    try:
-        suffix = os.path.splitext(file.filename)[1]
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(await file.read())
-            tmp_path = tmp.name
+    suffix = os.path.splitext(file.filename)[1]
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(await file.read())
+        tmp_path = tmp.name
 
-        result = cloudinary.uploader.upload(
-            tmp_path,
-            resource_type="video",
-            folder="input_videos"
-        )
-        os.remove(tmp_path)
-        return result["secure_url"]
-    except Exception as e:
-        print(f"[ERROR] Cloudinary upload failed: {e}")
-        raise HTTPException(500, detail=f"Cloudinary upload failed: {e}")
+    result = cloudinary.uploader.upload(
+        tmp_path,
+        resource_type="video",
+        folder="input_videos"
+    )
+    os.remove(tmp_path)
+    return result["secure_url"]
 
 # ================= PROCESS =================
 async def process_video(job_id: str, video_url: str):
@@ -343,372 +297,81 @@ async def process_video(job_id: str, video_url: str):
     }
     vehicle_count_total = 0
     
-    print(f"[YOLO] Starting process_video for job {job_id} with video_url: {video_url}")
     jobs[job_id] = {
-        "status": "processing",
         "progress": 0,
         "total": 0,
         "kiri": 0,
         "kanan": 0,
         "detections": []
     }
-    save_job(job_id)  # Save initial state
-
-    import time
-    try:
-        cap = cv2.VideoCapture(video_url)
-        if not cap.isOpened():
-            print(f"[ERROR] Cannot open video for job {job_id}: {video_url}")
-            jobs[job_id]["status"] = "failed"
-            jobs[job_id]["progress"] = -1
-            jobs[job_id]["error"] = "Cannot open video"
-            save_job(job_id)
-            return
-
-        # === VALIDASI DURASI VIDEO ===
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        if fps > 0:
-            duration = total_frames / fps
-        else:
-            duration = 0
-        if duration > 300:
-            print(f"[ERROR] Video too long for job {job_id}: {duration:.1f} seconds")
-            jobs[job_id]["status"] = "failed"
-            jobs[job_id]["progress"] = -1
-            jobs[job_id]["error"] = f"Video terlalu panjang ({duration:.1f} detik). Maksimal 300 detik (5 menit)."
-            save_job(job_id)
-            cap.release()
-            return
-
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if total_frames == 0:
-            print(f"[ERROR] Video has zero frames for job {job_id}")
-            total_frames = 1
-
-        frame_count = 0
-        PROCESS_WIDTH = 640  # Standard YOLO input size
-        counting_line_y = None
-        counted_ids = set()
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        output_path = os.path.join(tempfile.gettempdir(), f"output_{job_id}.mp4")
-
-        # === MAX PROCESSING TIME ===
-        max_processing_seconds = 300  # 5 minutes
-        start_time = time.time()
-        out_writer = None
-
-        while True:
-            # Abort if processing time exceeded
-            elapsed = time.time() - start_time
-            if elapsed > max_processing_seconds:
-                print(f"[ERROR] Job {job_id} exceeded max processing time of {max_processing_seconds} seconds. Aborting.")
-                jobs[job_id]["status"] = "failed"
-                jobs[job_id]["progress"] = -1
-                jobs[job_id]["error"] = f"Job exceeded max processing time of {max_processing_seconds} seconds (5 minutes)."
-                save_job(job_id)
-                cap.release()
-                return
-            try:
-                ret, frame = cap.read()
-                if not ret:
-                    print(f"[YOLO] End of video or read error for job {job_id} at frame {frame_count}")
-                    break
-                # ...existing code...
-                frame_count += 1
-                h, w, _ = frame.shape
-                if counting_line_y is None:
-                    counting_line_y = h // 2
-                scale = PROCESS_WIDTH / w
-                frame_resized = cv2.resize(frame, (PROCESS_WIDTH, int(h * scale)))
-                # === CRITICAL: Timeout for model.predict ===
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(model.predict,
-                        frame_resized,
-                        device="cpu",
-                        conf=CONF_THRESH,
-                        verbose=False,
-                        max_det=50
-                    )
-                    try:
-                        results = future.result(timeout=60)  # 60s per frame max
-                    except concurrent.futures.TimeoutError:
-                        print(f"[ERROR] model.predict timeout for job {job_id} at frame {frame_count}")
-                        jobs[job_id]["status"] = "failed"
-                        jobs[job_id]["progress"] = -1
-                        jobs[job_id]["error"] = f"YOLO model.predict timeout at frame {frame_count}"
-                        save_job(job_id)
-                        cap.release()
-                        return
-                # ...existing code...
-                # Update progress
-                current_progress = int((frame_count / total_frames) * 100)
-                jobs[job_id]["progress"] = current_progress
-                jobs[job_id]["total"] = vehicle_count_total
-                jobs[job_id]["kiri"] = counters['kiri']['total']
-                jobs[job_id]["kanan"] = counters['kanan']['total']
-                if current_progress % 10 == 0:
-                    print(f"[YOLO] Progress for job {job_id}: {current_progress}% ({frame_count}/{total_frames} frames)")
-                    save_job(job_id)
-                    gc.collect()
-                await asyncio.sleep(0)
-            except Exception as e:
-                print(f"[ERROR] Exception in frame processing for job {job_id}: {e}")
-                jobs[job_id]["status"] = "failed"
-                jobs[job_id]["progress"] = -1
-                jobs[job_id]["error"] = f"Exception in frame processing: {e}"
-                save_job(job_id)
-                cap.release()
-                return
-
-        cap.release()
-        if out_writer is not None:
-            out_writer.release()
-
-        # === RE-ENCODE VIDEO AGAR KOMPATIBEL BROWSER ===
-        import subprocess
-        reencoded_path = output_path.replace(".mp4", "_encoded.mp4")
-        def reencode_video(input_path, output_path):
-            command = [
-                "ffmpeg",
-                "-y",
-                "-i", input_path,
-                "-c:v", "libx264",
-                "-c:a", "aac",
-                "-movflags", "+faststart",
-                output_path
-            ]
-            try:
-                subprocess.run(command, check=True)
-                print(f"[YOLO] ffmpeg re-encode success for job {job_id}")
-                return True
-            except Exception as e:
-                print(f"[ERROR] ffmpeg re-encode failed for job {job_id}: {e}")
-                return False
-
-        if reencode_video(output_path, reencoded_path):
-            upload_path = reencoded_path
-        else:
-            upload_path = output_path
-
-        output_video_url = None
-        try:
-            result = cloudinary.uploader.upload(
-                upload_path,
-                resource_type="video",
-                folder="output_videos"
-            )
-            output_video_url = result["secure_url"]
-            print(f"[YOLO] Cloudinary upload success for job {job_id}")
-        except Exception as e:
-            print(f"[ERROR] Failed to upload output video for job {job_id}: {e}")
-            output_video_url = None
-
-        for path in [output_path, reencoded_path]:
-            if os.path.exists(path):
-                os.remove(path)
-        gc.collect()
-
-        jobs[job_id]["status"] = "completed"
-        jobs[job_id]["progress"] = 100
-        jobs[job_id]["completed"] = True
-        jobs[job_id]["outputVideoUrl"] = output_video_url
-        jobs[job_id]["vehicle_count"] = vehicle_count_total
-        jobs[job_id]["frames_processed"] = frame_count
-        jobs[job_id]["lane"] = {
-            "kiri": {
-                "total": counters['kiri']['total'],
-                "mobil": counters['kiri']['mobil'],
-                "bus": counters['kiri']['bus'],
-                "truk": counters['kiri']['truk']
-            },
-            "kanan": {
-                "total": counters['kanan']['total'],
-                "mobil": counters['kanan']['mobil'],
-                "bus": counters['kanan']['bus'],
-                "truk": counters['kanan']['truk']
-            }
-        }
-        jobs[job_id]["detections"] = detections
-        save_job(job_id)
-        print(f"[YOLO] Job {job_id} completed: {vehicle_count_total} vehicles in {frame_count} frames")
-    except Exception as e:
-        print(f"[ERROR] Exception in process_video for job {job_id}: {e}")
-        jobs[job_id]["status"] = "failed"
+    
+    cap = cv2.VideoCapture(video_url)
+    
+    if not cap.isOpened():
         jobs[job_id]["progress"] = -1
-        jobs[job_id]["error"] = str(e)
-        save_job(job_id)
-
+        jobs[job_id]["error"] = "Cannot open video"
+        return
+    
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     if total_frames == 0:
         total_frames = 1
-
+    
     frame_count = 0
     
-    # Memory optimization: Resize frame for faster processing
-    PROCESS_WIDTH = 640  # Standard YOLO input size
-
-    # === COUNTING LINE SETUP ===
-    counting_line_y = None  # Akan di-set setelah dapat frame height
-    counted_ids = set()  # Untuk menyimpan object_id yang sudah dihitung
-    
-    # === OUTPUT VIDEO WRITER ===
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    output_path = os.path.join(tempfile.gettempdir(), f"output_{job_id}.mp4")
-    out_writer = None
-
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-
+        
         frame_count += 1
         h, w, _ = frame.shape
-
-        # Set counting line di tengah frame (hanya sekali)
-        if counting_line_y is None:
-            counting_line_y = h // 2
-
-        # Resize frame to reduce memory usage
-        scale = PROCESS_WIDTH / w
-        frame_resized = cv2.resize(frame, (PROCESS_WIDTH, int(h * scale)))
-
-        # Predict on resized frame
+        
+        # Predict
         results = model.predict(
-            frame_resized,
+            frame,
             device="cpu",
             conf=CONF_THRESH,
-            verbose=False,
-            max_det=50  # Limit max detections per frame
+            verbose=False
         )
-
-        # Process detections (scale back coordinates)
+        
+        # Process detections
         detections = []
         if results[0].boxes is not None:
             boxes = results[0].boxes.xyxy.cpu().numpy()
             cls_ids = results[0].boxes.cls.cpu().numpy().astype(int)
             confidences = results[0].boxes.conf.cpu().numpy()
-
+            
             for box, cls_id, conf in zip(boxes, cls_ids, confidences):
                 x1, y1, x2, y2 = box
-                # Scale coordinates back to original frame size
-                x1, x2 = x1 / scale, x2 / scale
-                y1, y2 = y1 / scale, y2 / scale
                 cX = int((x1 + x2) / 2.0)
                 cY = int((y1 + y2) / 2.0)
-
+                
                 detections.append({
                     'bbox': [x1, y1, x2, y2],
                     'centroid': (cX, cY),
                     'class': class_map.get(cls_id, 'mobil'),
                     'conf': conf
                 })
-
-                # Draw bounding box and label on frame
-                color = (0, 255, 0)
-                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
-                label = f"{class_map.get(cls_id, 'mobil')} {conf:.2f}"
-                cv2.putText(frame, label, (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
-                # === COUNTING LINE LOGIC ===
-                # Hitung kendaraan jika centroid melewati garis
-                if abs(cY - counting_line_y) < 5:  # Toleransi 5px
-                    object_id = f"{cX}_{cY}_{frame_count}"
-                    if object_id not in counted_ids:
-                        vehicle_count_total += 1
-                        counted_ids.add(object_id)
-
-
-        # Draw counting line di frame
-        cv2.line(frame, (0, counting_line_y), (w, counting_line_y), (0, 0, 255), 2)
-
-        # Initialize writer after getting frame size
-        if out_writer is None:
-            out_writer = cv2.VideoWriter(output_path, fourcc, 20.0, (w, h))
-
-        out_writer.write(frame)
-
-        # Clear frame from memory
-        del frame, frame_resized, results
-
+        
         # Update tracking
         objects, next_object_id, vehicle_count_total = update_tracking(
             objects, next_object_id, detections, w, counters, vehicle_count_total
         )
-
+        
         # Update progress
-        current_progress = int((frame_count / total_frames) * 100)
-        jobs[job_id]["progress"] = current_progress
+        jobs[job_id]["progress"] = int((frame_count / total_frames) * 100)
         jobs[job_id]["total"] = vehicle_count_total
         jobs[job_id]["kiri"] = counters['kiri']['total']
         jobs[job_id]["kanan"] = counters['kanan']['total']
-
-        # Save periodically (every 10%) and force garbage collection
-        if current_progress % 10 == 0:
-            save_job(job_id)
-            gc.collect()  # Force garbage collection to free memory
-
+        
         await asyncio.sleep(0)
-
-
+    
     cap.release()
-    if out_writer is not None:
-        out_writer.release()
-
-    # === RE-ENCODE VIDEO AGAR KOMPATIBEL BROWSER ===
-    import subprocess
-    reencoded_path = output_path.replace(".mp4", "_encoded.mp4")
-    def reencode_video(input_path, output_path):
-        command = [
-            "ffmpeg",
-            "-y",
-            "-i", input_path,
-            "-c:v", "libx264",
-            "-c:a", "aac",
-            "-movflags", "+faststart",
-            output_path
-        ]
-        try:
-            subprocess.run(command, check=True)
-            return True
-        except Exception as e:
-            print(f"[ERROR] ffmpeg re-encode gagal: {e}")
-            return False
-
-    # Proses re-encode
-    if reencode_video(output_path, reencoded_path):
-        upload_path = reencoded_path
-    else:
-        upload_path = output_path  # fallback jika gagal
-
-    # Upload ke Cloudinary
-    output_video_url = None
-    try:
-        result = cloudinary.uploader.upload(
-            upload_path,
-            resource_type="video",
-            folder="output_videos"
-        )
-        output_video_url = result["secure_url"]
-    except Exception as e:
-        print(f"[ERROR] Failed to upload output video: {e}")
-        output_video_url = None
-
-    # Hapus file sementara
-    for path in [output_path, reencoded_path]:
-        if os.path.exists(path):
-            os.remove(path)
-
-    # Final garbage collection
-    gc.collect()
-
+    
     # Final results - NORMALIZED RESPONSE
-    jobs[job_id]["status"] = "completed"
     jobs[job_id]["progress"] = 100
     jobs[job_id]["completed"] = True
-    jobs[job_id]["outputVideoUrl"] = output_video_url
-
+    
     # 🔴 CRITICAL: Explicit field names to prevent mapping confusion
     jobs[job_id]["vehicle_count"] = vehicle_count_total  # Unique vehicles counted
     jobs[job_id]["frames_processed"] = frame_count  # Total frames processed
@@ -726,27 +389,12 @@ async def process_video(job_id: str, video_url: str):
             "truk": counters['kanan']['truk']
         }
     }
-
-    # Save all detections for the job (last frame's detections as example)
-    jobs[job_id]["detections"] = detections
-
-    # Save final result
-    save_job(job_id)
-
-    # DEBUG: Print detailed class distribution
-    total_mobil = counters['kiri']['mobil'] + counters['kanan']['mobil']
-    total_bus = counters['kiri']['bus'] + counters['kanan']['bus']
-    total_truk = counters['kiri']['truk'] + counters['kanan']['truk']
-    print(f"📊 CLASS DISTRIBUTION:")
-    print(f"   Mobil: {total_mobil} ({total_mobil/vehicle_count_total*100:.1f}%)")
-    print(f"   Bus: {total_bus} ({total_bus/vehicle_count_total*100:.1f}%)")
-    print(f"   Truk: {total_truk} ({total_truk/vehicle_count_total*100:.1f}%)")
-
+    
     # Validation: Ensure vehicle_count !== frames_processed
     if jobs[job_id]["vehicle_count"] == jobs[job_id]["frames_processed"]:
         print(f"⚠️ WARNING: vehicle_count ({jobs[job_id]['vehicle_count']}) == frames_processed ({jobs[job_id]['frames_processed']})")
         print("   This indicates a counting error!")
-
+    
     print(f"✅ Final: {jobs[job_id]['vehicle_count']} vehicles in {jobs[job_id]['frames_processed']} frames")
 
 # ================= ROUTES =================
@@ -780,44 +428,10 @@ async def result(job_id: str):
     Return normalized response with explicit field names
     to prevent vehicle_count being confused with frames
     """
-    # Check in-memory cache first
     job = jobs.get(job_id)
-
-    # If not in memory, try loading from file (in case of restart)
     if not job:
-        print(f"[INFO] Job {job_id} not found in memory. Trying to load from file...")
-        job = load_job(job_id)
-        if job:
-            jobs[job_id] = job  # Restore to memory cache
-            print(f"[INFO] Job {job_id} loaded from file and restored to memory.")
-        else:
-            print(f"[INFO] Job {job_id} not found in file storage. Returning status 'pending'.")
-            # Kembalikan response status pending agar polling frontend tidak error
-            response = {
-                "job_id": job_id,
-                "status": "pending",
-                "progress": 0,
-                "vehicle_count": 0,
-                "frames_processed": 0,
-                "lane": {
-                    "kiri": {"total": 0, "mobil": 0, "bus": 0, "truk": 0},
-                    "kanan": {"total": 0, "mobil": 0, "bus": 0, "truk": 0}
-                },
-                "detections": [],
-                "outputVideoUrl": None,
-                "_mapping_error": False,
-                "_warning": "Job belum ditemukan, silakan tunggu."
-            }
-            response = to_python_type(response)
-            return JSONResponse(response)
-
-    # Validate job completeness
-    required_fields = ["vehicle_count", "frames_processed", "lane"]
-    missing_fields = [f for f in required_fields if f not in job]
-    if job.get("completed") and missing_fields:
-        print(f"[ERROR] Job {job_id} is marked completed but missing fields: {missing_fields}")
-        raise HTTPException(500, detail=f"Job completed but missing fields: {missing_fields}")
-
+        raise HTTPException(404, detail="Job not found")
+    
     # Validate response before returning
     if job.get("completed"):
         # Ensure vehicle_count is present and different from frames
@@ -830,31 +444,23 @@ async def result(job_id: str):
             print(f"   frames_processed: {frames}")
             # Still return, but add warning flag
             job["_mapping_error"] = True
-
-    response = {
+    
+    return JSONResponse({
         "job_id": job_id,
         "status": "completed" if job.get("completed") else "processing",
         "progress": job.get("progress", 0),
-
+        
         # 🔴 CRITICAL: Explicit vehicle counting (NOT frames)
         "vehicle_count": job.get("vehicle_count", 0),  # Unique vehicles
         "frames_processed": job.get("frames_processed", 0),  # Total frames
-
+        
         # Lane breakdown
         "lane": job.get("lane", {
             "kiri": {"total": 0, "mobil": 0, "bus": 0, "truk": 0},
             "kanan": {"total": 0, "mobil": 0, "bus": 0, "truk": 0}
         }),
-
-        # Detection results (last frame or summary)
-        "detections": job.get("detections", []),
-
-        # Output video URL
-        "outputVideoUrl": job.get("outputVideoUrl", None),
-
+        
         # Safety flag
         "_mapping_error": job.get("_mapping_error", False),
         "_warning": "If vehicle_count == frames_processed, there's a counting error"
-    }
-    response = to_python_type(response)
-    return JSONResponse(response)
+    })
