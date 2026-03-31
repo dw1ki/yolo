@@ -23,16 +23,10 @@ const allowedOrigins = [
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   
-  // Set CORS headers - be more permissive to debug
-  if (origin && allowedOrigins.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
+  // Set CORS headers ALWAYS
+  if (!origin || allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
-  } else if (!origin) {
-    // Local or no origin
-    res.setHeader('Access-Control-Allow-Origin', '*');
-  } else {
-    // Allow anyway for debugging - remove in production
-    res.setHeader('Access-Control-Allow-Origin', origin);
   }
   
   res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, PUT, PATCH, POST, DELETE, OPTIONS');

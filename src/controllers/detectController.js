@@ -4,7 +4,7 @@ import FormData from "form-data";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { saveToLocalStorage, saveOutputVideo } from "../middlewares/uploadVideo.js";
+import { saveToLocalStorage } from "../middlewares/uploadVideo.js";
 import {
   performCalculation,
   validateRoadParameters,
@@ -44,51 +44,16 @@ export const uploadVideo = async (req, res) => {
       });
     }
 
-    // Handle both Cloudinary storage and memory storage
-    console.log(`💾 [UPLOAD] Processing file...`);
-    let localFileInfo;
-    
-    if (req.file.path) {
-      // Cloudinary storage - file already uploaded to Cloudinary
-      console.log(`✅ [UPLOAD] Using Cloudinary URL: ${req.file.path.substring(0, 60)}...`);
-      localFileInfo = {
-        filePath: req.file.path,
-        fileName: req.file.filename || req.file.originalname,
-        relativePath: req.file.path,
-        fileSize: req.file.size,
-        isCloudinary: true
-      };
-    } else if (req.file.buffer) {
-      // Memory storage - save buffer to local storage
-      console.log(`💾 [UPLOAD] Saving memory buffer to local storage...`);
-      const inputFolder = path.join(__dirname, "../../yolo/input_videos");
-      if (!fs.existsSync(inputFolder)) {
-        fs.mkdirSync(inputFolder, { recursive: true });
-      }
-      const timestamp = Date.now();
-      const safeFileName = `video_${timestamp}_${req.file.originalname.replace(/[^\w.-]/g, '_')}`;
-      const destinationPath = path.join(inputFolder, safeFileName);
-      fs.writeFileSync(destinationPath, req.file.buffer);
-      localFileInfo = {
-        filePath: destinationPath,
-        fileName: safeFileName,
-        relativePath: `yolo/input_videos/${safeFileName}`,
-        fileSize: req.file.size,
-        isCloudinary: false
-      };
-      console.log(`✅ [UPLOAD] File saved: ${destinationPath}`);
-    } else {
-      throw new Error("No file path or buffer available");
-    }
-    
-    console.log(`✓ [UPLOAD] File info: ${localFileInfo.fileSize} bytes`);
+    // ⭐ NEW: Save to local storage instead of Cloudinary
+    console.log(`💾 [UPLOAD] Saving to local storage...`);
+    const localFileInfo = await saveToLocalStorage(req.file.path, req.file.originalname);
+    console.log(`✅ [UPLOAD] File saved successfully to: ${localFileInfo.filePath}`);
 
-    // Verify Cloudinary files
-    if (localFileInfo.isCloudinary) {
-      console.log(`✓ [UPLOAD] Cloudinary file ready for processing`);
-    } else if (!fs.existsSync(localFileInfo.filePath)) {
-      throw new Error(`File verification failed - file not found: ${localFileInfo.filePath}`);
+    // Verify file exists before saving to DB
+    if (!fs.existsSync(localFileInfo.filePath)) {
+      throw new Error(`File verification failed - file not found immediately after save at: ${localFileInfo.filePath}`);
     }
+    console.log(`✓ [UPLOAD] File existence verified: ${localFileInfo.fileSize} bytes`);
 
     // Create detection record with local file path
     const detection = new Detection({
@@ -358,25 +323,6 @@ const processWithYOLO = async (detectionId, videoUrl) => {
       cloudinaryUrl: jobResult.cloudinaryUrl
     });
 
-    // ⭐ SAVE OUTPUT VIDEO TO LOCAL STORAGE
-    let outputVideoPath = null;
-    try {
-      const outputUrl = jobResult.backendUrl || jobResult.outputVideoUrl;
-      if (outputUrl) {
-        console.log(`\n📽️  [SAVE] Saving output video from YOLO...`);
-        const outputVideoInfo = await saveOutputVideo(
-          outputUrl,
-          detectionId.toString(),
-          Detection.fileName || "output_video.mp4"
-        );
-        outputVideoPath = outputVideoInfo.filePath;
-        console.log(`✅ [SAVE] Output video saved: ${outputVideoInfo.relativePath}`);
-      }
-    } catch (saveErr) {
-      console.warn(`⚠️  [SAVE] Could not save output video: ${saveErr.message}`);
-      // Continue anyway - this is not critical
-    }
-
     // ⭐ STEP 3: Update detection with YOLO results
     const detection = await Detection.findById(detectionId);
 
@@ -425,7 +371,7 @@ const processWithYOLO = async (detectionId, videoUrl) => {
       (jobResult.lane?.kiri?.truk || 0) + (jobResult.lane?.kanan?.truk || 0);
     
     // ⭐ ADD OUTPUT VIDEO URL FOR FRONTEND
-    detection.yoloResults.outputVideoUrl = outputVideoPath || jobResult.backendUrl || jobResult.outputVideoUrl || `/download/${detectionId}`;
+    detection.yoloResults.outputVideoUrl = jobResult.backendUrl || jobResult.outputVideoUrl || `/download/${detectionId}`;
     detection.videoUrl = detection.yoloResults.outputVideoUrl; // Also set on detection for backward compatibility
 
     await detection.save();
