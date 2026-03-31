@@ -6,8 +6,27 @@ import axios from "axios";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// folder sementara untuk upload
-const upload = multer({ dest: "tmp/" });
+// ⭐ Use memory storage for Vercel (read-only filesystem)
+// For local development, you can change to disk storage
+const storage = process.env.NODE_ENV === "production" 
+  ? multer.memoryStorage()  // Vercel: store in RAM
+  : multer.diskStorage({    // Local: store on disk
+      destination: (req, file, cb) => {
+        const tmpFolder = path.join(__dirname, "../../tmp");
+        if (!fs.existsSync(tmpFolder)) {
+          fs.mkdirSync(tmpFolder, { recursive: true });
+        }
+        cb(null, tmpFolder);
+      },
+      filename: (req, file, cb) => {
+        cb(null, Date.now() + '-' + file.originalname);
+      }
+    });
+
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 500 * 1024 * 1024 } // 500MB limit
+});
 
 // ⭐ NEW: Save to local storage instead of Cloudinary
 export const saveToLocalStorage = async (filePath, originalName) => {
