@@ -2,6 +2,7 @@ import multer from "multer";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import axios from "axios";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -40,6 +41,65 @@ export const saveToLocalStorage = async (filePath, originalName) => {
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }
+    throw err;
+  }
+};
+
+// ⭐ NEW: Save output video from YOLO API to local storage
+export const saveOutputVideo = async (outputVideoUrl, detectionId, originalFileName) => {
+  try {
+    const outputFolder = path.join(__dirname, "../../yolo/output_videos");
+    
+    if (!fs.existsSync(outputFolder)) {
+      fs.mkdirSync(outputFolder, { recursive: true });
+      console.log(`✅ Created output folder: ${outputFolder}`);
+    }
+
+    // Generate unique filename with timestamp
+    const timestamp = Date.now();
+    const sanitizedName = originalFileName.replace(/[^\w.-]/g, '_');
+    const safeFileName = `output_${timestamp}_${detectionId.substring(0, 8)}_${sanitizedName}`;
+    const destinationPath = path.join(outputFolder, safeFileName);
+
+    // If outputVideoUrl is a URL, download it; if it's a local path, copy it
+    if (outputVideoUrl.startsWith('http://') || outputVideoUrl.startsWith('https://')) {
+      console.log(`📥 [SAVE OUTPUT] Downloading from URL: ${outputVideoUrl}`);
+      const response = await axios.get(outputVideoUrl, { responseType: 'stream' });
+      
+      return new Promise((resolve, reject) => {
+        const fileStream = fs.createWriteStream(destinationPath);
+        response.data.pipe(fileStream);
+        fileStream.on('finish', () => {
+          console.log(`✅ [SAVE OUTPUT] Output video saved: ${destinationPath}`);
+          resolve({
+            filePath: destinationPath,
+            fileName: safeFileName,
+            relativePath: `yolo/output_videos/${safeFileName}`,
+            fileSize: fs.statSync(destinationPath).size
+          });
+        });
+        fileStream.on('error', reject);
+      });
+    } else {
+      // It's a local path - copy it
+      console.log(`📋 [SAVE OUTPUT] Copying from local path: ${outputVideoUrl}`);
+      
+      if (!fs.existsSync(outputVideoUrl)) {
+        throw new Error(`Output video not found at: ${outputVideoUrl}`);
+      }
+
+      fs.copyFileSync(outputVideoUrl, destinationPath);
+      console.log(`✅ [SAVE OUTPUT] Output video copied: ${destinationPath}`);
+
+      return {
+        filePath: destinationPath,
+        fileName: safeFileName,
+        relativePath: `yolo/output_videos/${safeFileName}`,
+        fileSize: fs.statSync(destinationPath).size
+      };
+    }
+  } catch (err) {
+    console.error(`❌ [SAVE OUTPUT] Error saving output video:`, err.message);
     throw err;
   }
 };
