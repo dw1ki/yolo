@@ -7,10 +7,19 @@ import axios from "axios";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ⭐ Use memory storage for Vercel (read-only filesystem)
-// For local development, you can change to disk storage
-const storage = process.env.NODE_ENV === "production" 
-  ? multer.memoryStorage()  // Vercel: store in RAM
-  : multer.diskStorage({    // Local: store on disk
+let upload;
+
+try {
+  // Production (Vercel): memory storage
+  if (process.env.NODE_ENV === "production") {
+    upload = multer({ 
+      storage: multer.memoryStorage(),
+      limits: { fileSize: 500 * 1024 * 1024 } // 500MB
+    });
+    console.log("[MULTER] Using memory storage for production");
+  } else {
+    // Local development: disk storage
+    const storage = multer.diskStorage({
       destination: (req, file, cb) => {
         const tmpFolder = path.join(__dirname, "../../tmp");
         if (!fs.existsSync(tmpFolder)) {
@@ -22,11 +31,22 @@ const storage = process.env.NODE_ENV === "production"
         cb(null, Date.now() + '-' + file.originalname);
       }
     });
-
-const upload = multer({ 
-  storage: storage,
-  limits: { fileSize: 500 * 1024 * 1024 } // 500MB limit
-});
+    
+    upload = multer({ 
+      storage: storage,
+      limits: { fileSize: 500 * 1024 * 1024 }
+    });
+    console.log("[MULTER] Using disk storage for local development");
+  }
+} catch (err) {
+  console.error("[MULTER] Error initializing multer:", err.message);
+  // Fallback to memory storage
+  upload = multer({ 
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 500 * 1024 * 1024 }
+  });
+  console.log("[MULTER] Fallback to memory storage due to error");
+}
 
 // ⭐ NEW: Save to local storage instead of Cloudinary
 export const saveToLocalStorage = async (filePath, originalName) => {
