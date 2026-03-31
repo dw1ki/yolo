@@ -1,0 +1,11 @@
+__pycache__
+*.pyc
+.env
+temp/*
+temp_videos/*
+output/*
+output_videos/*
+jobs/*
+tmp/*
+.DS_Store
+*.pt.bak

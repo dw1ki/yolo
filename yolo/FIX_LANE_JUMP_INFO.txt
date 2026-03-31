@@ -1,0 +1,69 @@
+"""
+🔹 FIX VERIFICATION: Anti-Lane-Jump Test
+Verifikasi bahwa object yang sudah counted tidak bisa "lompat" ke lane lain
+"""
+
+print("""
+✅ FIX DITERAPKAN:
+==================================================
+
+1️⃣ LANE LOCK (setelah counted)
+   - Kalau object sudah di-count, lane-nya di-LOCK
+   - Tidak bisa berubah ke lane lain lagi
+   - Prevent: counted ID dari lajur kiri melompat ke lajur kanan
+
+2️⃣ CROSS-LANE VALIDATION (saat rematching)
+   - Kalau object sudah di-count dan akan match ke detection
+   - DAN lane BERBEDA = gunakan distance threshold yang SANGAT ketat
+   - Threshold: MAX_DISTANCE / 3 = 60 / 3 = 20px
+   - Jadi hanya accept kalau SANGAT dekat (otherwise = ID salah)
+
+3️⃣ HASIL YANG DIHARAPKAN:
+   ✅ Lajur kiri: Mobil ter-count, langgeng hijau di lajur kiri
+   ✅ Lajur kanan: Mobil baru mendapat ID baru, bukan inherit dari lajur kiri
+   ✅ Counting akurat tanpa false counting dari lane jump
+
+==================================================
+
+Konfigurasi Sekarang:
+- MAX_DISTANCE: 60px (normal matching)
+- CROSS_LANE_THRESHOLD: 20px (ketat untuk cross-lane)
+- MIN_FRAMES_TO_COUNT: 5 frame
+- LINE_POSITION: 300px
+
+Tes Scenario:
+┌─────────────────────────────────────┐
+│  LAJUR KIRI        │  LAJUR KANAN   │
+│  ─────────────────────────────────  │
+│  Mobil1 (ID=5) ──> │                │
+│         (COUNTED)  │                │
+│                    │  Mobil2 (ID=?) │
+│                    │  ──────────>  │
+│  ══════════════════════════════════ │ <- COUNTING LINE (Y=300)
+└─────────────────────────────────────┘
+
+BEFORE (BUG):
+- Mobil1 (lajur kiri) → ID=5 COUNTED (hijau)
+- Mobil2 (lajur kanan) → ID=5 (inherit dari mobil1!)
+- Result: Mobil2 jadi hijau padahal blum crossing
+
+AFTER (FIX):
+- Mobil1 (lajur kiri) → ID=5 COUNTED (hijau, lane=kiri LOCKED)
+- Mobil2 (lajur kanan) → ID=6 baru (merah, lane=kanan)
+- Result: Hanya mobil2 yang counted saat melewati line ✓
+
+==================================================
+
+📝 Code Changes:
+  1. Line ~330: Tambah validasi cross-lane dengan distance ketat
+  2. Line ~360: Lock lane untuk object yang sudah counted
+
+Untuk test:
+  python count_video.py <video_path>
+  
+Perhatikan:
+  ✅ Lajur kanan jangan ada hijau sampai benar-benar crossing
+  ✅ ID tidak lonjatan dari satu lane ke lane lain
+  ✅ Counter akurat untuk masing-masing lane
+
+""")

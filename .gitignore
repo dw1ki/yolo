@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# YOLO & ML Models (Large files - exclude from git)
+# But ALLOW Python scripts (.py files)
+yolo/models/
+yolo/data/
+yolo/outputs/
+yolo/runs/
+yolo/uploads/
+yolo/temp/
+yolo/jobs/
+yolo/*.pt
+!yolo/*.py
+
+# Uploaded files & videos (exclude from git)
+backend/tmp/*
+uploads/
+temp/
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build & Runtime
+dist/
+build/
+.next/

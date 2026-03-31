@@ -1,0 +1,156 @@
+📁 LOKASI FILE best_video_combined.pt
+═══════════════════════════════════════════════════════════════
+
+📍 FULL PATH:
+───────────────────────────────────────
+D:\backup\pktj\backend\yolo\models\best_video_combined.pt
+
+📊 FILE INFO:
+───────────────────────────────────────
+Size:       49.61 MB
+Type:       PyTorch Model (.pt)
+Status:     ✅ Active (API menggunakan model ini)
+Dataset:    Video 008 (514 frames) + WhatsApp (167 frames)
+Created:    2026-03-25
+Performance: mAP50 (Combined) - Balanced untuk kedua video
+
+
+📂 FOLDER STRUCTURE:
+═══════════════════════════════════════════════════════════════
+
+D:\backup\pktj\backend\yolo\
+│
+├── 📂 models/
+│   ├── best.pt                          (5.9 MB - OLD model)
+│   ├── best_video_008.pt                (49.6 MB - Video 008 only)
+│   └── ⭐ best_video_combined.pt        (49.6 MB - ACTIVE - Video 008 + WhatsApp)
+│
+├── 📂 data/
+│   ├── 📂 dataset_008/                  (Training data Video 008)
+│   ├── 📂 dataset_combined/             (Merged dataset 008 + WhatsApp)
+│   ├── 📂 images/
+│   │   ├── train/ (142 WhatsApp images)
+│   │   └── val/   (25 WhatsApp images)
+│   └── 📂 labels/
+│       ├── train/ (142 labels)
+│       └── val/   (25 labels)
+│
+├── 📂 runs/
+│   └── 📂 detect/
+│       ├── 📂 vehicle_008/
+│       ├── 📂 vehicle_combined/         <- Training output folder
+│       │   └── weights/
+│       │       └── best.pt              <- Source sebelum copy
+│       └── 📂 vehicle_night2/
+│
+├── 📂 input_videos/
+│   ├── 008.mp4                          (Video 008 - 19.8 MB)
+│   └── WhatsApp Video 2026-01-18...     (WhatsApp - 26.3 MB)
+│
+├── 📂 output_videos/
+│   ├── output_*.mp4                     (Hasil processing video)
+│   └── ...
+│
+├── api.py                               (Line 81: MODEL_PATH = best_video_combined.pt)
+├── api_combined.py
+├── train_combined.py
+├── compare_models.py
+└── ...
+
+
+🔄 MODEL SELECTION FLOW:
+═══════════════════════════════════════════════════════════════
+
+1. TRAINING SELESAI
+   ↓
+   runs/detect/vehicle_combined/weights/best.pt (49.6 MB)
+
+2. COPY KE /models/
+   ↓
+   models/best_video_combined.pt (49.6 MB) ⭐
+
+3. API LOAD MODEL
+   ↓
+   api.py Line 81: MODEL_PATH = "models/best_video_combined.pt"
+   ↓
+   model = YOLO(MODEL_PATH)  ✅ ACTIVE
+
+
+📋 ALL AVAILABLE MODELS:
+═══════════════════════════════════════════════════════════════
+
+│ Model Name                │ Size    │ Dataset              │ Status        │
+├───────────────────────────┼─────────┼──────────────────────┼───────────────┤
+│ best.pt                   │ 5.9 MB  │ vehicle_night2 (old) │ ⚠️ Legacy     │
+│ best_video_008.pt         │ 49.6 MB │ Video 008 only       │ ✅ Backup    │
+│ best_video_combined.pt    │ 49.6 MB │ 008 + WhatsApp       │ ⭐ ACTIVE    │
+└───────────────────────────┴─────────┴──────────────────────┴───────────────┘
+
+
+💾 BACKUP / TRAINING FLOW:
+═══════════════════════════════════════════════════════════════
+
+PHASE 1: Merge Datasets
+  ├─ dataset_008/        (514 train + 127 val)
+  └─ data/images,labels/ (142 train + 25 val) → WhatsApp
+      ↓
+  dataset_combined/      (798 train + 179 val) = 977 total
+
+
+PHASE 2: Training
+  input:  data_combined.yaml → dataset_combined/
+  ↓
+  model training (60 epochs, CPU)
+  ↓
+  output: runs/detect/vehicle_combined/weights/best.pt
+
+
+PHASE 3: Deployment
+  runs/detect/vehicle_combined/weights/best.pt
+  ↓
+  (COPY)
+  ↓
+  models/best_video_combined.pt ← ACTIVE
+  ↓
+  api.py loads this model
+  ↓
+  Processing video dengan model gabungan
+
+
+🎯 CURRENT MODEL USAGE:
+═══════════════════════════════════════════════════════════════
+
+API Server (port 8000):
+  ├─ MODEL_PATH = "models/best_video_combined.pt"
+  ├─ Classes: Car (0), Bus (1), Truck (2)
+  ├─ Input: 640x640 images
+  ├─ Config:
+  │   ├─ CONF_THRESH = 0.55
+  │   ├─ IOU_THRESHOLD = 0.25
+  │   ├─ LINE_POSITION = 300px
+  │   └─ MAX_DISTANCE = 60px
+  └─ Output: Detection + Counting + Tracking
+
+
+🚀 QUICK REFERENCE:
+═══════════════════════════════════════════════════════════════
+
+Model file location:
+  D:\backup\pktj\backend\yolo\models\best_video_combined.pt
+
+To use in Python:
+  from ultralytics import YOLO
+  model = YOLO("D:/backup/pktj/backend/yolo/models/best_video_combined.pt")
+
+To use in API:
+  Already configured in api.py (Line 81)
+  Just run: uvicorn api:app --reload
+
+Training source:
+  runs/detect/vehicle_combined/weights/best.pt
+
+Previous version:
+  models/best_video_008.pt (42.09 MB - Video 008 only)
+
+Oldest backup:
+  models/best.pt (5.9 MB - vehicle_night2 legacy)

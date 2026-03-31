@@ -1,0 +1,27 @@
+{
+  "total_frames": 4499,
+  "processed_frames": 171,
+  "sampling_rate": "1/5",
+  "confidence_threshold": 0.5,
+  "total_detections": 142,
+  "mobil": {
+    "model": "best.pt (custom trained)",
+    "total_count": 142,
+    "avg_per_frame": 0.8304093567251462,
+    "percentage": 100.0
+  },
+  "bus": {
+    "model": "yolov8n COCO (pre-trained)",
+    "total_count": 0,
+    "avg_per_frame": 0.0,
+    "percentage": 0.0
+  },
+  "truk": {
+    "model": "yolov8n COCO (pre-trained)",
+    "total_count": 0,
+    "avg_per_frame": 0.0,
+    "percentage": 0.0
+  },
+  "timestamp": "2026-02-13T16:03:21.446227",
+  "video_path": "test_small.mp4"
+}

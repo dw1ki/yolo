@@ -1,0 +1,15 @@
+# Nixpacks configuration for Railway
+# This ensures Python3 is installed alongside Node.js
+
+[build]
+cmd_pkgs = [
+  "python3",
+  "python311Packages.pip"
+]
+
+[nix]
+# Include Python in the Nix environment
+pkgs = [
+  "python3",
+  "python311Packages.pip"
+]
