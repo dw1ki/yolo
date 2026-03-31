@@ -163,15 +163,17 @@ export const processVideo = async (req, res) => {
 // ================== YOLO API PROCESSING (ASYNC) ==================
 const processWithYOLO = async (detectionId, videoUrl) => {
   try {
-    const pythonApiUrl = process.env.PYTHON_API;
+    // Support both PYTHON_API (for Vercel) and YOLO_API_URL (for Railway)
+    const pythonApiUrl = process.env.PYTHON_API || process.env.YOLO_API_URL;
 
     if (!pythonApiUrl) {
-      throw new Error("PYTHON_API tidak dikonfigurasi di environment variables");
+      throw new Error("YOLO API tidak dikonfigurasi. Set PYTHON_API atau YOLO_API_URL di environment variables");
     }
 
     console.log(`\n🔄 [PROCESS] ========== PROCESSING STARTED ==========`);
     console.log(`📋 Detection ID: ${detectionId}`);
     console.log(`📁 Local video path: ${videoUrl}`);
+    console.log(`🌐 Using YOLO API: ${pythonApiUrl}`);
 
     // ⭐ VERIFY FILE EXISTS - check if it's local path or needs conversion
     let actualVideoPath = videoUrl;
