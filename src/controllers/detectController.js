@@ -269,22 +269,28 @@ const processWithYOLO = async (detectionId, videoUrl) => {
       } catch (pollErr) {
         consecutiveErrors++;
         const errorCode = pollErr.code || pollErr.response?.status || pollErr.message;
+        const respStatus = pollErr.response?.status;
         const isTransientError = 
           pollErr.code === 'ECONNRESET' ||
           pollErr.code === 'ECONNREFUSED' ||
           pollErr.code === 'ETIMEDOUT' ||
           pollErr.code === 'ENOTFOUND' ||
-          pollErr.response?.status === 504 ||
-          pollErr.response?.status === 503 ||
-          pollErr.response?.status === 502 ||
-          pollErr.response?.status === 404 ||
+          // Treat gateway/timeouts and server errors as transient (include Cloudflare 524)
+          respStatus === 504 ||
+          respStatus === 503 ||
+          respStatus === 502 ||
+          respStatus === 524 ||
+          (typeof respStatus === 'number' && respStatus >= 500 && respStatus < 600) ||
+          // 404 may be transient if the remote service is still initializing
+          respStatus === 404 ||
           pollErr.message?.includes('SSL') ||
           pollErr.message?.includes('ssl');
 
         // Log every 5 attempts or on first error
         if (consecutiveErrors === 1 || consecutiveErrors % 5 === 0) {
           console.warn(
-            `⚠️  Poll attempt ${attempts} failed (${errorCode}): ${consecutiveErrors}/${maxConsecutiveErrors} consecutive errors - ${pollErr.message}`
+            `⚠️  Poll attempt ${attempts} failed (status=${respStatus} / code=${pollErr.code}): ${consecutiveErrors}/${maxConsecutiveErrors} consecutive errors - ${pollErr.message}`,
+            { responseData: pollErr.response?.data }
           );
         }
 
@@ -298,10 +304,11 @@ const processWithYOLO = async (detectionId, videoUrl) => {
           attempts++;
         } else if (consecutiveErrors >= maxConsecutiveErrors) {
           // Too many consecutive errors, give up
+          const lastResp = pollErr.response ? `status=${pollErr.response.status}` : '';
           throw new Error(
             `YOLO polling failed after ${consecutiveErrors} consecutive transient errors. ` +
-            `Last error: ${errorCode} - ${pollErr.message}. ` +
-            `Check ngrok tunnel status and network connectivity.`
+            `Last error: ${errorCode} ${lastResp} - ${pollErr.message}. ` +
+            `Check ngrok/tunnel status and network connectivity.`
           );
         } else {
           // Non-transient error, throw immediately
