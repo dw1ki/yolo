@@ -9,3 +9,5 @@ jobs/*
 tmp/*
 .DS_Store
 *.pt.bak
+cloudflared.exe
+yolo/*.exe
