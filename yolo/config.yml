@@ -1,6 +1,9 @@
 tunnel: yolo-api
 credentials-file: C:\Users\YUNINDRA EKA\.cloudflared\4079097c-e520-40bc-bb33-0fb886109c76.json
 
+# Serve YOLO API lewat Cloudflare Tunnel.
+# Pastikan Python API berjalan di http://localhost:8000 sebelum tunnel dijalankan.
+
 # QUIC has been unstable on this network; use HTTP/2 for a more predictable tunnel.
 protocol: http2
 

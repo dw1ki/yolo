@@ -15,6 +15,31 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isRetryableYoloError = (err) => {
+  const status = err.response?.status;
+  const message = `${err.message || ""} ${err.code || ""}`.toLowerCase();
+
+  return (
+    err.code === "ECONNRESET" ||
+    err.code === "ECONNABORTED" ||
+    err.code === "ECONNREFUSED" ||
+    err.code === "ETIMEDOUT" ||
+    err.code === "ENOTFOUND" ||
+    err.code === "ERR_NETWORK" ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    status === 524 ||
+    (typeof status === "number" && status >= 500 && status < 600) ||
+    message.includes("stream 1 canceled") ||
+    message.includes("incoming request ended abruptly") ||
+    message.includes("context canceled") ||
+    message.includes("socket hang up")
+  );
+};
+
 // ================== UPLOAD VIDEO TO LOCAL STORAGE ==================
 export const uploadVideo = async (req, res) => {
   try {
@@ -221,23 +246,60 @@ const processWithYOLO = async (detectionId, videoUrl) => {
     // Must send file content, not just path
     console.log(`📤 [PROCESS] Uploading file to YOLO API via multipart...`);
     console.log(`📤 [PROCESS] File size: ${(fileStats.size / 1024 / 1024).toFixed(2)} MB`);
-    
-    // Create FormData with file stream
-    const fileStream = fs.createReadStream(actualVideoPath);
+
     const fileName = actualVideoPath.split("/").pop() || actualVideoPath.split("\\").pop();
-    
-    const form = new FormData();
-    form.append("file", fileStream, fileName);
-    form.append("file_detection_id", detectionId.toString());
-    
-    const detectResponse = await axios.post(
-      `${pythonApiUrl}/detect`,
-      form,
-      {
-        headers: form.getHeaders(),
-        timeout: 300000, // 5 minutes for upload
+    const createDetectForm = () => {
+      const fileStream = fs.createReadStream(actualVideoPath);
+      const form = new FormData();
+      form.append("file", fileStream, fileName);
+      form.append("file_detection_id", detectionId.toString());
+      return form;
+    };
+
+    let detectResponse;
+    let lastUploadError = null;
+    const maxUploadAttempts = 4;
+
+    for (let attempt = 1; attempt <= maxUploadAttempts; attempt++) {
+      const form = createDetectForm();
+
+      try {
+        if (attempt > 1) {
+          const retryDelay = Math.min(1000 * attempt * attempt, 10000);
+          console.log(`⏳ [PROCESS] Retrying YOLO upload in ${retryDelay}ms (attempt ${attempt}/${maxUploadAttempts})`);
+          await sleep(retryDelay);
+        }
+
+        detectResponse = await axios.post(
+          `${pythonApiUrl}/detect`,
+          form,
+          {
+            headers: form.getHeaders(),
+            timeout: 300000, // 5 minutes for upload
+            maxBodyLength: Infinity,
+            maxContentLength: Infinity,
+            validateStatus: (status) => status < 500,
+          }
+        );
+
+        break;
+      } catch (uploadErr) {
+        lastUploadError = uploadErr;
+
+        if (attempt < maxUploadAttempts && isRetryableYoloError(uploadErr)) {
+          console.warn(
+            `⚠️ [PROCESS] YOLO upload attempt ${attempt}/${maxUploadAttempts} failed: ${uploadErr.message}. Retrying...`
+          );
+          continue;
+        }
+
+        throw uploadErr;
       }
-    );
+    }
+
+    if (!detectResponse) {
+      throw lastUploadError || new Error("YOLO upload failed before receiving a response");
+    }
 
     console.log(`✅ [PROCESS] YOLO accepted job:`, detectResponse.data);
     const jobId = detectResponse.data.job_id || detectionId.toString();
