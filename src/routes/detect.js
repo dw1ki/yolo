@@ -24,6 +24,61 @@ function getUploadMiddleware() {
 
 const router = express.Router();
 
+// ⭐ NEW: Health check function untuk verify YOLO API availability
+async function checkYOLOHealth() {
+  try {
+    const pythonApiUrl = process.env.PYTHON_API || "https://hurtling-unforecasted-horace.ngrok-free.dev";
+    const apiUrl = pythonApiUrl.endsWith("/") ? pythonApiUrl.slice(0, -1) : pythonApiUrl;
+    
+    const healthRes = await axios.get(`${apiUrl}/health`, { 
+      timeout: 5000 
+    });
+    
+    const isHealthy = healthRes.status === 200 && healthRes.data?.status === "healthy";
+    return {
+      healthy: isHealthy,
+      status: healthRes.data?.status,
+      device: healthRes.data?.device,
+      message: isHealthy ? "YOLO API is ready" : "YOLO API returned non-healthy status"
+    };
+  } catch (err) {
+    return {
+      healthy: false,
+      status: "unreachable",
+      error: err.message,
+      message: `YOLO API health check failed: ${err.message}`
+    };
+  }
+}
+
+// ⭐ NEW: Middleware untuk check YOLO health sebelum process
+async function checkYOLOBeforeProcess(req, res, next) {
+  try {
+    console.log(`🏥 [YOLO Health] Checking API health before processing...`);
+    const health = await checkYOLOHealth();
+    
+    if (!health.healthy) {
+      console.warn(`⚠️  [YOLO Health] API is not healthy:`, health);
+      return res.status(503).json({
+        success: false,
+        error: "YOLO API unavailable",
+        details: health.message,
+        status: "service_unavailable"
+      });
+    }
+    
+    console.log(`✅ [YOLO Health] API is healthy, proceeding...`);
+    next();
+  } catch (err) {
+    console.error(`❌ [YOLO Health] Unexpected error during health check:`, err.message);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to check YOLO API health",
+      details: err.message
+    });
+  }
+}
+
 // ===== MOCK ENDPOINT - For quick testing without YOLO =====
 router.post("/yolo/mock", protect, async (req, res) => {
   try {
@@ -233,6 +288,20 @@ router.get("/yolo/frame/:jobId", verifyToken, async (req, res) => {
 
 // ===== Original routes =====
 
+// ⭐ NEW: Health check endpoint
+router.get("/health/yolo", protect, async (req, res) => {
+  try {
+    const health = await checkYOLOHealth();
+    if (health.healthy) {
+      return res.json({ success: true, ...health });
+    } else {
+      return res.status(503).json({ success: false, ...health });
+    }
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Save YOLO results (dari Railway) - need authentication
 router.post("/", protect, saveYOLOResults);
 
@@ -240,7 +309,8 @@ router.post("/", protect, saveYOLOResults);
 router.post("/upload", protect, getUploadMiddleware(), uploadVideo);
 
 // Process video (send ke YOLO API)
-router.post("/process", protect, processVideo);
+// ⭐ ADDED: Health check middleware before processing
+router.post("/process", protect, checkYOLOBeforeProcess, processVideo);
 
 // Save road parameters
 router.put("/:id/parameters", saveParameters);

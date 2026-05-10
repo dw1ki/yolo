@@ -9,10 +9,15 @@ protocol: http2
 
 # Origin request settings are applied to the published application below.
 originRequest:
-  connectTimeout: 30s
-  keepAliveTimeout: 120s
-  tcpKeepAlive: 30s
+  connectTimeout: 600s        # ⭐ INCREASED: 10 minutes (dari 30s) untuk large file uploads
+  readTimeout: 600s           # ⭐ NEW: 10 minutes untuk prevent timeout pada long processing
+  writeTimeout: 600s          # ⭐ NEW: 10 minutes untuk prevent timeout saat streaming responses
+  keepAliveTimeout: 600s      # ⭐ INCREASED: 10 minutes (dari 120s) untuk stable connections
+  tcpKeepAlive: 30s          # Keep: 30s untuk maintain connection health
   disableChunkedEncoding: false
+  # ⭐ NEW: Settings untuk large file streaming
+  maxIdleConnections: 100
+  idleConnTimeout: 30s
 
 ingress:
   - hostname: yoloapi.my.id
