@@ -1,27 +1,22 @@
 tunnel: yolo-api
 credentials-file: C:\Users\YUNINDRA EKA\.cloudflared\4079097c-e520-40bc-bb33-0fb886109c76.json
 
+# QUIC has been unstable on this network; use HTTP/2 for a more predictable tunnel.
+protocol: http2
+
+# Origin request settings are applied to the published application below.
+originRequest:
+  connectTimeout: 30s
+  keepAliveTimeout: 120s
+  tcpKeepAlive: 30s
+  disableChunkedEncoding: false
+
 ingress:
   - hostname: yoloapi.my.id
     service: http://localhost:8000
-    # ⭐ TIMEOUT SETTINGS untuk long-running video processing
-    timeout-connect: 30s      # Connection timeout
-    timeout: 3600s            # ⭐ CRITICAL FIX: 1 hour (from 30 min) - video 1jam butuh ~2300s, 3600s = safe buffer
-    # Keep-alive settings untuk maintain connection
-    keep-alive-timeout: 120s   # ⭐ INCREASED: 2 minutes keep-alive
-    # TCP settings untuk stability
-    tcp-keepalive: 30s
-    disable-chunked-encoding: false
-    max-chunk-size: 8388608   # 8MB chunks untuk large video responses
-
-warp-routing:
-  enabled: false
+  - service: http_status:404
 
 # ⭐ Logging untuk debug timeout issues
 loglevel: info
 transport-loglevel: warn
-
-# ⭐ ADDITIONAL CLOUDFLARE TUNNEL SETTINGS untuk keep persistent connections alive
-keep-alive-connections: 100
-keep-alive-timeout: 120s
 

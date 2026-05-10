@@ -163,8 +163,25 @@ export const processVideo = async (req, res) => {
 // ================== YOLO API PROCESSING (ASYNC) ==================
 const processWithYOLO = async (detectionId, videoUrl) => {
   try {
-    // Support both PYTHON_API (for Vercel) and YOLO_API_URL (for Railway)
-    const pythonApiUrl = process.env.PYTHON_API || process.env.YOLO_API_URL;
+    // ⭐ PREFER LOCALHOST for local development (direct, no tunnel delays)
+    // Fallback to PYTHON_API (Vercel) or YOLO_API_URL (Railway) for production
+    let pythonApiUrl = process.env.PYTHON_API || process.env.YOLO_API_URL;
+    let apiSource = "env (PYTHON_API / YOLO_API_URL)";
+
+    // Try localhost first if running locally (avoids cloudflared tunnel timeouts)
+    if (!process.env.NODE_ENV || process.env.NODE_ENV === "development") {
+      try {
+        const localhostResponse = await axios.head("http://localhost:8000/status", { timeout: 2000 });
+        if (localhostResponse.status === 200 || localhostResponse.status === 404) {
+          pythonApiUrl = "http://localhost:8000";
+          apiSource = "localhost (local YOLO server)";
+          console.log(`✅ [PROCESS] Detected local YOLO server, using direct connection`);
+        }
+      } catch (err) {
+        // localhost not available, use configured URL
+        console.log(`ℹ️  [PROCESS] Local YOLO server not reachable (${err.code}), falling back to configured API`);
+      }
+    }
 
     if (!pythonApiUrl) {
       throw new Error("YOLO API tidak dikonfigurasi. Set PYTHON_API atau YOLO_API_URL di environment variables");
@@ -173,7 +190,7 @@ const processWithYOLO = async (detectionId, videoUrl) => {
     console.log(`\n🔄 [PROCESS] ========== PROCESSING STARTED ==========`);
     console.log(`📋 Detection ID: ${detectionId}`);
     console.log(`📁 Local video path: ${videoUrl}`);
-    console.log(`🌐 Using YOLO API: ${pythonApiUrl}`);
+    console.log(`🌐 Using YOLO API: ${pythonApiUrl} (${apiSource})`);
 
     // ⭐ VERIFY FILE EXISTS - check if it's local path or needs conversion
     let actualVideoPath = videoUrl;
