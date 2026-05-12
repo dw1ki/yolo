@@ -95,6 +95,8 @@ except Exception as e:
 
 # In-memory jobs cache
 jobs = {}
+# Track active processing tasks by job_id so retries don't spawn duplicate workers
+active_tasks = {}
 
 def save_job(job_id: str):
     """Save job to persistent file storage"""
@@ -122,7 +124,7 @@ def load_job(job_id: str):
 
 # ================= CONFIG (Optimized dari count_video.py) =================
 # Batch Processing
-BATCH_SIZE = 3  # ⭐ Process 3 frames at a time (safe GPU balance)
+BATCH_SIZE = 8  # ⭐ Process 8       frames at a time (safe GPU balance)
 BATCH_QUEUE = []
 
 # Line & Offset - SEPARATE per lane
@@ -722,6 +724,9 @@ async def process_video(job_id: str, video_path: str):
         print(f"   [DEBUG] Video: FPS={fps}, Frames={total_frames}, Duration={total_frames/fps:.1f}s")
 
         frame_count = 0
+
+        # Full-frame processing keeps accuracy highest; no frame skipping is applied.
+        save_job(job_id)
         
         # ⭐ Write annotated video with MJPEG codec (more stable than mp4v)
         fourcc = cv2.VideoWriter_fourcc(*'MJPG')
@@ -1007,6 +1012,8 @@ async def process_video(job_id: str, video_path: str):
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(e)
         save_job(job_id)
+    finally:
+        active_tasks.pop(job_id, None)
 
 # ================= ROUTES =================
 
@@ -1045,6 +1052,41 @@ async def detect_video(
     print(f"[DEBUG] Detection ID: {file_detection_id}")
     
     try:
+        # Use detection_id as job_id and enforce idempotency for backend retries.
+        job_id = file_detection_id
+
+        existing = jobs.get(job_id) or load_job(job_id)
+        if existing:
+            jobs[job_id] = existing
+            existing_status = existing.get("status")
+            if existing_status in ["processing", "queued"]:
+                print(f"[DEBUG] Job already active, returning existing job: {job_id}")
+                return {
+                    "job_id": job_id,
+                    "video_path": existing.get("video_path"),
+                    "status": existing_status,
+                    "message": "Video already queued/processing"
+                }
+            if existing_status == "completed":
+                print(f"[DEBUG] Job already completed, returning existing result: {job_id}")
+                return {
+                    "job_id": job_id,
+                    "video_path": existing.get("video_path"),
+                    "status": "completed",
+                    "message": "Video already processed"
+                }
+
+        # Extra safety: if an asyncio task is still alive for this job, do not start another.
+        existing_task = active_tasks.get(job_id)
+        if existing_task and not existing_task.done():
+            print(f"[DEBUG] Active task exists, skipping duplicate start: {job_id}")
+            return {
+                "job_id": job_id,
+                "video_path": None,
+                "status": "processing",
+                "message": "Video already processing"
+            }
+
         # Save uploaded file to temp location
         import tempfile
         temp_dir = tempfile.gettempdir()
@@ -1070,12 +1112,10 @@ async def detect_video(
         
         print(f"[DEBUG] Video format OK: {video_path.split('.')[-1].upper()}")
         
-        # Use detection_id as job_id
-        job_id = file_detection_id
-        
         # Start background processing
         print(f"[DEBUG] Starting background processing task...")
         task = asyncio.create_task(process_video(job_id, video_path))
+        active_tasks[job_id] = task
         
         # Set initial job state
         jobs[job_id] = {
